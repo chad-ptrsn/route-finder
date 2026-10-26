@@ -29,11 +29,13 @@ No API keys or Cloudflare bindings are required for this prototype. The map need
 
 - MapLibre GL JS map centered on Chaska, with zoom and current-location controls.
 - City trail layers from the Carver County ArcGIS FeatureServer.
-- Draw route points or select/unselect mapped trail segments.
+- Draw rough route points, choose a maximum snap distance, and preview the connected path through the mapped city trail network.
+- Accept the snapped route or keep the original sketch; planned and closed trails are shown for context but excluded from routing.
+- Select or unselect mapped trail segments.
 - Distance and known/unknown surface summaries.
 - Save and restore one route in browser local storage.
 
-Drawn route geometry is not snapped to the trail network. Selected trail features are measured individually; the app does not yet determine whether selected segments connect. Elevation, route snapping, and turn-by-turn navigation are not included.
+Snapping currently uses the City of Chaska paved, gravel, association-trail, sidewalk, crosswalk, bridge, and underpass layers. Basemap roads are visible but not part of the routing graph. Waypoints must be within the chosen snap distance and connected by the mapped network. Network joins within about 3 m are treated as connected. The app offers one shortest-distance connection, not multiple alternatives; inspect the preview for data gaps or questionable connections. Elevation and turn-by-turn navigation are not included.
 
 ## Data and attribution
 

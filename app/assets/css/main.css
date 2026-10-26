@@ -32,6 +32,14 @@ h1 { margin: 10px 0 5px; font-family: Georgia, serif; font-size: 32px; font-weig
 .action-button.primary { border-color: var(--green); color: white; background: var(--green); }
 .action-button:disabled { cursor: default; opacity: .42; }
 .hint { margin: 11px 0 0; color: var(--muted); font-size: 12px; line-height: 1.45; }
+.snap-controls { margin-top: 15px; padding-top: 13px; border-top: 1px solid var(--line); }
+.snap-label { display: flex; justify-content: space-between; gap: 10px; color: #536057; font-size: 11px; }
+.snap-label strong { color: var(--ink); font-variant-numeric: tabular-nums; }
+.snap-slider { display: block; width: 100%; margin: 8px 0 11px; accent-color: var(--green); }
+.snap-button { width: 100%; }
+.snap-message { margin: 9px 0 0; color: var(--muted); font-size: 11px; line-height: 1.45; }
+.snap-error { color: #a14135; }
+.snap-decisions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px; }
 .stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .stat-label { margin-bottom: 4px; color: var(--muted); font-size: 11px; }
 .stat-value { font-size: 19px; font-weight: 700; font-variant-numeric: tabular-nums; }
