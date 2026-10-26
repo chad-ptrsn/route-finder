@@ -10,6 +10,7 @@ const mode = ref<RouteMode>('draw')
 const drawCoords = ref<Position[]>([])
 const selectedSections = ref<RouteSection[]>([])
 const message = ref('Loading Chaska trail layers…')
+const routeAction = ref<{ type: 'clear' | 'undo', revision: number }>({ type: 'clear', revision: 0 })
 const saveKey = 'chaska-adventure-route-v1'
 
 const sectionMeters = (section: RouteSection) => section.parts.reduce((sum, part) => sum + lengthMeters(part), 0)
@@ -41,6 +42,7 @@ const surfaceSummary = computed(() => {
   return `${miles(totals.paved)} paved · ${miles(totals.gravel)} gravel · ${miles(totals.sidewalk)} connector · ${miles(totals.unknown)} unknown`
 })
 const hasRoute = computed(() => routeSections.value.length > 0)
+const canUndo = computed(() => drawCoords.value.length > 0)
 
 function updateRoute(payload: { drawCoords: Position[], selected: RouteSection[] }) {
   drawCoords.value = payload.drawCoords
@@ -68,20 +70,19 @@ function restoreRoute() {
 }
 
 function clearRoute() {
-  drawCoords.value = []
-  selectedSections.value = []
+  routeAction.value = { type: 'clear', revision: routeAction.value.revision + 1 }
 }
 
 function undoLast() {
-  if (drawCoords.value.length) drawCoords.value = drawCoords.value.slice(0, -1)
-  else selectedSections.value = selectedSections.value.slice(0, -1)
+  if (!canUndo.value) return
+  routeAction.value = { type: 'undo', revision: routeAction.value.revision + 1 }
 }
 </script>
 
 <template>
   <main class="app-shell">
     <aside class="side-panel">
-      <div class="brand">Your Chaska field test</div>
+      <div class="brand">Your route, your way</div>
       <h1>Build your own way.</h1>
       <p class="intro">Explore local roads and trails, then shape a run or walk that feels right to you.</p>
 
@@ -114,7 +115,7 @@ function undoLast() {
         </div>
         <p class="surface-summary">{{ hasRoute ? surfaceSummary : 'No route yet' }}</p>
         <div class="actions-grid">
-          <button class="action-button" :disabled="!hasRoute" @click="undoLast">Undo last</button>
+          <button class="action-button" :disabled="!canUndo" @click="undoLast">Undo last</button>
           <button class="action-button" :disabled="!hasRoute" @click="clearRoute">Clear route</button>
           <button class="action-button primary" :disabled="!hasRoute" @click="saveRoute">Save route</button>
           <button class="action-button" @click="restoreRoute">Restore saved</button>
@@ -138,7 +139,7 @@ function undoLast() {
     <section class="map-panel" aria-label="Map area">
       <div class="map-badge">Chaska, Minnesota <span>·</span> Map first, your choice always</div>
       <ClientOnly>
-        <TrailMap :mode="mode" @route-update="updateRoute" @data-status="message = $event" />
+        <TrailMap :mode="mode" :route-action="routeAction" @route-update="updateRoute" @data-status="message = $event" />
         <template #fallback><div class="map-fallback">Preparing the map…</div></template>
       </ClientOnly>
     </section>

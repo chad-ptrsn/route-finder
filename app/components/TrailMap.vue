@@ -7,7 +7,10 @@ type Position = [number, number]
 type SurfaceGroup = 'paved' | 'gravel' | 'sidewalk' | 'unknown'
 interface RouteSection { key: string, name: string, group: SurfaceGroup, parts: Position[][] }
 
-const props = defineProps<{ mode: Mode }>()
+const props = defineProps<{
+  mode: Mode
+  routeAction: { type: 'clear' | 'undo', revision: number }
+}>()
 const emit = defineEmits<{
   routeUpdate: [payload: { drawCoords: Position[], selected: RouteSection[] }]
   dataStatus: [message: string]
@@ -41,6 +44,19 @@ function publishRoute() {
   drawCoords.forEach(coordinate => features.push({ type: 'Feature', properties: { kind: 'point' }, geometry: { type: 'Point', coordinates: coordinate } }))
   map?.getSource('user-route')?.setData({ type: 'FeatureCollection', features })
 }
+
+watch(() => props.routeAction.revision, () => {
+  if (props.routeAction.type === 'clear') {
+    drawCoords = []
+    selected = []
+  }
+  else if (props.routeAction.type === 'undo' && drawCoords.length) {
+    drawCoords.pop()
+  }
+  else return
+
+  publishRoute()
+})
 
 function lineParts(geometry: GeoJSON.Geometry | null): Position[][] {
   if (!geometry) return []
