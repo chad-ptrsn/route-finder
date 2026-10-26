@@ -106,7 +106,7 @@ function keepDrawing() {
   <main class="app-shell">
     <aside class="side-panel">
       <div class="brand">Your route, your way</div>
-      <h1>Build your own way.</h1>
+      <h1>Build your own route.</h1>
       <p class="intro">Explore local roads and trails, then shape a run or walk that feels right to you.</p>
 
       <section class="card">
