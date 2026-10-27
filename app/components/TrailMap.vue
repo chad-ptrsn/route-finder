@@ -179,7 +179,13 @@ async function onMapClick(event: MapMouseEvent) {
   }
 
   const hits = map.queryRenderedFeatures(event.point, { layers: layerIds.filter(id => map?.getLayer(id)) })
-  const hit = hits[0]
+  // Planned and closed trails are drawn for context and can overlap existing
+  // selectable paths. Prefer an existing path under the click when both match.
+  const hit = hits.find((feature) => {
+    const featureLayerId = Number(feature.layer.id.replace('city-trail-', ''))
+    const featureSpec = layerSpecs.find(layer => layer.id === featureLayerId)
+    return featureSpec && (!('selectable' in featureSpec) || featureSpec.selectable !== false)
+  }) || hits[0]
   if (!hit) return
   const layerId = Number(hit.layer.id.replace('city-trail-', ''))
   const spec = layerSpecs.find(layer => layer.id === layerId)
