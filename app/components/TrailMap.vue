@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import type { Map as MapLibreMap, MapMouseEvent } from 'maplibre-gl'
+import type { Map as MapLibreMap, MapMouseEvent, MapTouchEvent } from 'maplibre-gl'
 import { onBeforeUnmount, onMounted, watch } from 'vue'
-import { routeAcrossTrails, type Position, type SurfaceGroup, type TrailEdge, type TrailRouteSection } from '~/utils/trail-router'
+import { nearestTrailDistanceMeters, routeAcrossTrails, SnapRouteError, type Position, type SurfaceGroup, type TrailEdge, type TrailRouteSection } from '~/utils/trail-router'
 
 type Mode = 'draw' | 'select'
 type RouteSection = TrailRouteSection
@@ -9,7 +9,7 @@ type SnapState = { status: 'loading' | 'ready' | 'working' | 'preview' | 'error'
 
 const props = defineProps<{
   mode: Mode
-  routeAction: { type: 'clear' | 'undo' | 'snap' | 'accept-snap' | 'keep-drawing' | 'restore', revision: number, drawCoords?: Position[], selected?: RouteSection[] }
+  routeAction: { type: 'clear' | 'undo' | 'snap' | 'accept-snap' | 'keep-drawing' | 'restore' | 'focus-route', revision: number, drawCoords?: Position[], selected?: RouteSection[], focusCoords?: Position[], focusDrawCoords?: Position[], focusSections?: RouteSection[] }
   snapToleranceMeters: number
 }>()
 const emit = defineEmits<{
@@ -37,6 +37,9 @@ let selected: RouteSection[] = []
 let loadedLayers = 0
 let networkEdges: TrailEdge[] = []
 let snapPreview: ReturnType<typeof routeAcrossTrails> | undefined
+let snapFailurePointIndex: number | undefined
+let draggingPointIndex: number | undefined
+let suppressClickAfterDrag = false
 
 function publishRoute() {
   emit('routeUpdate', { drawCoords: [...drawCoords], selected: selected.map(section => ({ ...section, parts: section.parts.map(part => [...part]) })) })
@@ -45,7 +48,11 @@ function publishRoute() {
     if (part.length > 1) features.push({ type: 'Feature', properties: { kind: section.group, index }, geometry: { type: 'LineString', coordinates: part } })
   }))
   if (drawCoords.length > 1) features.push({ type: 'Feature', properties: { kind: 'drawn' }, geometry: { type: 'LineString', coordinates: drawCoords } })
-  drawCoords.forEach(coordinate => features.push({ type: 'Feature', properties: { kind: 'point' }, geometry: { type: 'Point', coordinates: coordinate } }))
+  drawCoords.forEach((coordinate, index) => features.push({
+    type: 'Feature',
+    properties: { kind: 'point', pointIndex: index, snapError: index === snapFailurePointIndex },
+    geometry: { type: 'Point', coordinates: coordinate },
+  }))
   map?.getSource('user-route')?.setData({ type: 'FeatureCollection', features })
   const previewFeatures: GeoJSON.Feature[] = []
   snapPreview?.sections.forEach(section => section.parts.forEach(part => previewFeatures.push({
@@ -57,12 +64,17 @@ function publishRoute() {
   map?.getSource('snap-preview')?.setData({ type: 'FeatureCollection', features: previewFeatures })
 }
 
+function clearSavedRouteFocus() {
+  map?.getSource('saved-route-focus')?.setData({ type: 'FeatureCollection', features: [] })
+}
+
 async function updateSnapPreview() {
   if (drawCoords.length < 2) {
     emit('snapState', { status: 'error', message: 'Add at least two points before snapping to trails.' })
     return
   }
   emit('snapState', { status: 'working', message: 'Finding the connected trail path…' })
+  snapFailurePointIndex = undefined
   try {
     snapPreview = routeAcrossTrails(drawCoords, networkEdges, props.snapToleranceMeters)
     publishRoute()
@@ -75,6 +87,7 @@ async function updateSnapPreview() {
   }
   catch (error) {
     snapPreview = undefined
+    snapFailurePointIndex = error instanceof SnapRouteError ? error.waypointIndex : undefined
     publishRoute()
     emit('snapState', { status: 'error', message: error instanceof Error ? error.message : 'Could not find a connected trail path.' })
   }
@@ -85,12 +98,15 @@ watch(() => props.routeAction.revision, async () => {
     drawCoords = []
     selected = []
     snapPreview = undefined
+    snapFailurePointIndex = undefined
+    clearSavedRouteFocus()
     emit('snapState', { status: 'ready', message: 'Draw a route, then preview a snap to mapped city trails.' })
   }
   else if (props.routeAction.type === 'undo') {
     if (drawCoords.length) drawCoords.pop()
     else selected.pop()
     snapPreview = undefined
+    snapFailurePointIndex = undefined
     emit('snapState', { status: 'ready', message: 'Last route addition removed.' })
   }
   else if (props.routeAction.type === 'snap') {
@@ -100,17 +116,37 @@ watch(() => props.routeAction.revision, async () => {
     selected = [...selected, ...snapPreview.sections]
     drawCoords = []
     snapPreview = undefined
+    snapFailurePointIndex = undefined
     emit('snapState', { status: 'accepted', message: 'Snapped trail route accepted. You can keep editing or clear it.' })
   }
   else if (props.routeAction.type === 'keep-drawing') {
     snapPreview = undefined
+    snapFailurePointIndex = undefined
     emit('snapState', { status: 'ready', message: 'Kept your original drawing. Adjust it or preview another snap.' })
   }
   else if (props.routeAction.type === 'restore') {
     drawCoords = props.routeAction.drawCoords || []
     selected = props.routeAction.selected || []
     snapPreview = undefined
+    snapFailurePointIndex = undefined
+    clearSavedRouteFocus()
     emit('snapState', { status: 'ready', message: 'Restored route. You can continue editing or preview a snap for the drawn section.' })
+  }
+  else if (props.routeAction.type === 'focus-route') {
+    const coordinates = props.routeAction.focusCoords || []
+    if (!map || !coordinates.length) return
+    const features: GeoJSON.Feature[] = []
+    props.routeAction.focusSections?.forEach((section, index) => section.parts.forEach(part => {
+      if (part.length > 1) features.push({ type: 'Feature', properties: { index }, geometry: { type: 'LineString', coordinates: part } })
+    }))
+    const drawnCoordinates = props.routeAction.focusDrawCoords || []
+    if (drawnCoordinates.length > 1) features.push({ type: 'Feature', properties: { kind: 'drawn' }, geometry: { type: 'LineString', coordinates: drawnCoordinates } })
+    map.getSource('saved-route-focus')?.setData({ type: 'FeatureCollection', features })
+    const maplibre = await import('maplibre-gl')
+    const bounds = new maplibre.LngLatBounds(coordinates[0], coordinates[0])
+    coordinates.slice(1).forEach(coordinate => bounds.extend(coordinate))
+    map.fitBounds(bounds, { padding: { top: 70, right: 55, bottom: 70, left: 55 }, maxZoom: 16.5, duration: 800 })
+    return
   }
   else return
 
@@ -126,11 +162,17 @@ function lineParts(geometry: GeoJSON.Geometry | null): Position[][] {
 
 async function onMapClick(event: MapMouseEvent) {
   if (!map) return
+  if (suppressClickAfterDrag) {
+    suppressClickAfterDrag = false
+    return
+  }
   if (props.mode === 'draw') {
+    clearSavedRouteFocus()
     if (snapPreview) {
       snapPreview = undefined
       emit('snapState', { status: 'ready', message: 'Route changed. Preview another snap when ready.' })
     }
+    snapFailurePointIndex = undefined
     drawCoords.push([event.lngLat.lng, event.lngLat.lat])
     publishRoute()
     return
@@ -175,6 +217,51 @@ async function onMapClick(event: MapMouseEvent) {
   new maplibre.Popup({ closeButton: true, offset: 8 }).setLngLat(event.lngLat).setDOMContent(content).addTo(map)
 }
 
+function startPointDrag(event: MapMouseEvent | MapTouchEvent) {
+  if (!map || props.mode !== 'draw' || snapFailurePointIndex === undefined) return
+  const hit = map.queryRenderedFeatures(event.point, { layers: ['route-points'] })
+    .find(feature => feature.properties?.snapError === true)
+  const pointIndex = Number(hit?.properties?.pointIndex)
+  if (!hit || !Number.isInteger(pointIndex) || pointIndex !== snapFailurePointIndex) return
+
+  draggingPointIndex = pointIndex
+  snapPreview = undefined
+  map.dragPan.disable()
+  map.getCanvas().style.cursor = 'grabbing'
+  event.preventDefault()
+}
+
+function moveDraggedPoint(event: MapMouseEvent | MapTouchEvent) {
+  if (!map || draggingPointIndex === undefined) return
+  const pointIndex = draggingPointIndex
+  const coordinate: Position = [event.lngLat.lng, event.lngLat.lat]
+  drawCoords[pointIndex] = coordinate
+  const distance = nearestTrailDistanceMeters(coordinate, networkEdges)
+  const withinLimit = distance <= props.snapToleranceMeters
+  snapFailurePointIndex = withinLimit ? undefined : pointIndex
+  publishRoute()
+  emit('snapState', {
+    status: withinLimit ? 'ready' : 'error',
+    message: withinLimit
+      ? `Point ${pointIndex + 1} is ${Math.round(distance)} m from a mapped trail and is within your ${props.snapToleranceMeters} m limit.`
+      : `Point ${pointIndex + 1} is ${Math.round(distance)} m from the nearest routable Chaska trail. Drag it within ${props.snapToleranceMeters} m to retry the preview.`,
+  })
+  event.preventDefault()
+}
+
+function endPointDrag() {
+  if (!map || draggingPointIndex === undefined) return
+  draggingPointIndex = undefined
+  map.dragPan.enable()
+  map.getCanvas().style.cursor = ''
+  suppressClickAfterDrag = true
+  window.setTimeout(() => { suppressClickAfterDrag = false }, 0)
+  publishRoute()
+  if (snapFailurePointIndex === undefined) {
+    emit('snapState', { status: 'ready', message: 'The point is within range. Preview the snap again when ready.' })
+  }
+}
+
 async function loadLayer(spec: typeof layerSpecs[number]) {
   const url = `${serviceUrl}/${spec.id}/query?where=1%3D1&outFields=*&returnGeometry=true&outSR=4326&f=geojson`
   const response = await fetch(url)
@@ -203,7 +290,7 @@ async function loadLayer(spec: typeof layerSpecs[number]) {
       'line-opacity': spec.dash ? 0.75 : 0.92,
       ...(spec.dash ? { 'line-dasharray': spec.dash } : {}),
     },
-  })
+  }, 'route-casing')
   loadedLayers++
 }
 
@@ -233,9 +320,12 @@ onMounted(async () => {
   map.on('load', async () => {
     map!.addSource('user-route', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } })
     map!.addSource('snap-preview', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } })
-    map!.addLayer({ id: 'route-casing', type: 'line', source: 'user-route', filter: ['==', ['geometry-type'], 'LineString'], paint: { 'line-color': '#fffefa', 'line-width': 8, 'line-opacity': 0.95 } })
-    map!.addLayer({ id: 'route-line', type: 'line', source: 'user-route', filter: ['==', ['geometry-type'], 'LineString'], paint: { 'line-color': '#315f42', 'line-width': 4, 'line-opacity': 0.98 } })
-    map!.addLayer({ id: 'route-points', type: 'circle', source: 'user-route', filter: ['==', ['geometry-type'], 'Point'], paint: { 'circle-radius': 6, 'circle-color': '#315f42', 'circle-stroke-color': '#fffefa', 'circle-stroke-width': 2 } })
+    map!.addSource('saved-route-focus', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } })
+    map!.addLayer({ id: 'route-casing', type: 'line', source: 'user-route', filter: ['==', ['geometry-type'], 'LineString'], paint: { 'line-color': '#fffefa', 'line-width': 10, 'line-opacity': 0.98 } })
+    map!.addLayer({ id: 'route-line', type: 'line', source: 'user-route', filter: ['==', ['geometry-type'], 'LineString'], paint: { 'line-color': '#245bdb', 'line-width': 6, 'line-opacity': 1 } })
+    map!.addLayer({ id: 'route-points', type: 'circle', source: 'user-route', filter: ['==', ['geometry-type'], 'Point'], paint: { 'circle-radius': 7, 'circle-color': ['case', ['==', ['get', 'snapError'], true], '#cf5c4d', '#315f42'], 'circle-stroke-color': '#fffefa', 'circle-stroke-width': 2 } })
+    map!.addLayer({ id: 'saved-route-focus-casing', type: 'line', source: 'saved-route-focus', paint: { 'line-color': '#fffefa', 'line-width': 14, 'line-opacity': 0.98 } })
+    map!.addLayer({ id: 'saved-route-focus-line', type: 'line', source: 'saved-route-focus', paint: { 'line-color': '#245bdb', 'line-width': 8, 'line-opacity': 1 } })
     map!.addLayer({ id: 'snap-preview-line', type: 'line', source: 'snap-preview', filter: ['==', ['geometry-type'], 'LineString'], paint: { 'line-color': '#287fa7', 'line-width': 6, 'line-opacity': 0.96, 'line-dasharray': [1.5, 1.2] } })
     map!.addLayer({ id: 'snap-preview-points', type: 'circle', source: 'snap-preview', filter: ['==', ['geometry-type'], 'Point'], paint: { 'circle-radius': 5, 'circle-color': '#287fa7', 'circle-stroke-color': '#fffefa', 'circle-stroke-width': 2 } })
     const results = await Promise.allSettled(layerSpecs.map(loadLayer))
@@ -249,7 +339,19 @@ onMounted(async () => {
     publishRoute()
   })
   map.on('click', onMapClick)
+  map.on('mousedown', startPointDrag)
+  map.on('touchstart', startPointDrag)
   map.on('mousemove', (event) => {
+    if (draggingPointIndex !== undefined) {
+      moveDraggedPoint(event)
+      return
+    }
+    if (props.mode === 'draw') {
+      const hit = snapFailurePointIndex !== undefined && map!.queryRenderedFeatures(event.point, { layers: ['route-points'] })
+        .some(feature => feature.properties?.snapError === true)
+      map!.getCanvas().style.cursor = hit ? 'grab' : ''
+      return
+    }
     if (props.mode !== 'select') {
       map!.getCanvas().style.cursor = ''
       return
@@ -257,6 +359,9 @@ onMounted(async () => {
     const hit = map!.queryRenderedFeatures(event.point, { layers: layerIds.filter(id => map!.getLayer(id)) }).length > 0
     map!.getCanvas().style.cursor = hit ? 'pointer' : ''
   })
+  map.on('touchmove', moveDraggedPoint)
+  map.on('mouseup', endPointDrag)
+  map.on('touchend', endPointDrag)
 })
 
 watch(() => props.mode, () => {

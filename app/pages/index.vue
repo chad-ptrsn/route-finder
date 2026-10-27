@@ -1,21 +1,27 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 
 type RouteMode = 'draw' | 'select'
 type SurfaceGroup = 'paved' | 'gravel' | 'sidewalk' | 'unknown'
 type Position = [number, number]
 interface RouteSection { key: string, name: string, group: SurfaceGroup, parts: Position[][] }
-type RouteActionType = 'clear' | 'undo' | 'snap' | 'accept-snap' | 'keep-drawing' | 'restore'
+interface SavedRoute { id: string, name: string, savedAt: string, drawCoords: Position[], selected: RouteSection[] }
+type RouteActionType = 'clear' | 'undo' | 'snap' | 'accept-snap' | 'keep-drawing' | 'restore' | 'focus-route'
 interface SnapState { status: 'loading' | 'ready' | 'working' | 'preview' | 'error' | 'accepted', message: string, routeMeters?: number, maxOffsetMeters?: number }
 
 const mode = ref<RouteMode>('draw')
 const drawCoords = ref<Position[]>([])
 const selectedSections = ref<RouteSection[]>([])
 const message = ref('Loading Chaska trail layers…')
-const routeAction = ref<{ type: RouteActionType, revision: number, drawCoords?: Position[], selected?: RouteSection[] }>({ type: 'clear', revision: 0 })
+const routeAction = ref<{ type: RouteActionType, revision: number, drawCoords?: Position[], selected?: RouteSection[], focusCoords?: Position[], focusDrawCoords?: Position[], focusSections?: RouteSection[] }>({ type: 'clear', revision: 0 })
 const snapToleranceMeters = ref(35)
 const snapState = ref<SnapState>({ status: 'loading', message: 'Loading the local trail network…' })
 const saveKey = 'chaska-adventure-route-v1'
+const savedRoutes = ref<SavedRoute[]>([])
+const editingSavedRouteId = ref<string | null>(null)
+const focusedSavedRouteId = ref<string | null>(null)
+const saveNameOpen = ref(false)
+const routeNameDraft = ref('')
 
 const sectionMeters = (section: RouteSection) => section.parts.reduce((sum, part) => sum + lengthMeters(part), 0)
 const lengthMeters = (coords: Position[]) => {
@@ -46,8 +52,53 @@ const surfaceSummary = computed(() => {
   return `${miles(totals.paved)} paved · ${miles(totals.gravel)} gravel · ${miles(totals.sidewalk)} connector · ${miles(totals.unknown)} unknown`
 })
 const hasRoute = computed(() => routeSections.value.length > 0)
+const editingSavedRoute = computed(() => savedRoutes.value.find(route => route.id === editingSavedRouteId.value))
 const canUndo = computed(() => drawCoords.value.length > 0 || selectedSections.value.length > 0)
 const canRequestSnap = computed(() => drawCoords.value.length >= 2 && snapState.value.status !== 'loading' && snapState.value.status !== 'working')
+
+function cloneRouteData(draw: Position[], sections: RouteSection[]): Pick<SavedRoute, 'drawCoords' | 'selected'> {
+  return {
+    drawCoords: draw.map(point => [...point] as Position),
+    selected: sections.map(section => ({
+      ...section,
+      parts: section.parts.map(part => part.map(point => [...point] as Position)),
+    })),
+  }
+}
+
+function currentRouteData() {
+  return cloneRouteData(drawCoords.value, selectedSections.value)
+}
+
+function persistSavedRoutes() {
+  localStorage.setItem(saveKey, JSON.stringify({ routes: savedRoutes.value }))
+}
+
+function loadSavedRoutes() {
+  try {
+    const stored = JSON.parse(localStorage.getItem(saveKey) || 'null')
+    if (Array.isArray(stored?.routes)) {
+      savedRoutes.value = stored.routes
+      return
+    }
+    // Keep the single route saved by the earlier prototype as the first list item.
+    if (stored && Array.isArray(stored.drawCoords) && Array.isArray(stored.selected)) {
+      savedRoutes.value = [{
+        id: `route-${Date.now().toString(36)}`,
+        name: 'Saved route',
+        savedAt: stored.savedAt || new Date().toISOString(),
+        ...cloneRouteData(stored.drawCoords, stored.selected),
+      }]
+      persistSavedRoutes()
+    }
+  }
+  catch {
+    savedRoutes.value = []
+    message.value = 'Could not read saved routes from this browser.'
+  }
+}
+
+onMounted(loadSavedRoutes)
 
 function updateRoute(payload: { drawCoords: Position[], selected: RouteSection[] }) {
   drawCoords.value = payload.drawCoords
@@ -55,28 +106,106 @@ function updateRoute(payload: { drawCoords: Position[], selected: RouteSection[]
 }
 
 function saveRoute() {
-  localStorage.setItem(saveKey, JSON.stringify({ savedAt: new Date().toISOString(), drawCoords: drawCoords.value, selected: selectedSections.value }))
-  message.value = 'Route saved in this browser on this device.'
+  if (!hasRoute.value) return
+  if (editingSavedRouteId.value) {
+    const index = savedRoutes.value.findIndex(route => route.id === editingSavedRouteId.value)
+    if (index < 0) return
+    const existing = savedRoutes.value[index]!
+    savedRoutes.value[index] = { ...existing, ...currentRouteData(), savedAt: new Date().toISOString() }
+    persistSavedRoutes()
+    message.value = `Saved changes to “${existing.name}”.`
+    return
+  }
+  routeNameDraft.value = `Route ${savedRoutes.value.length + 1}`
+  saveNameOpen.value = true
 }
 
-function restoreRoute() {
-  try {
-    const saved = JSON.parse(localStorage.getItem(saveKey) || 'null')
-    if (!saved) {
-      message.value = 'No saved route found in this browser yet.'
-      return
-    }
-    routeAction.value = {
-      type: 'restore',
-      revision: routeAction.value.revision + 1,
-      drawCoords: saved.drawCoords || [],
-      selected: saved.selected || [],
-    }
-    message.value = `Restored route saved ${new Date(saved.savedAt).toLocaleString()}.`
+function confirmSaveRoute() {
+  const name = routeNameDraft.value.trim() || `Route ${savedRoutes.value.length + 1}`
+  const route: SavedRoute = {
+    id: globalThis.crypto?.randomUUID?.() || `route-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+    name,
+    savedAt: new Date().toISOString(),
+    ...currentRouteData(),
   }
-  catch {
-    message.value = 'Could not read the saved route.'
+  savedRoutes.value = [route, ...savedRoutes.value]
+  persistSavedRoutes()
+  saveNameOpen.value = false
+  editingSavedRouteId.value = route.id
+  focusedSavedRouteId.value = route.id
+  message.value = `Saved “${route.name}”. You can add more and save changes to this route.`
+}
+
+function editSavedRoute(route: SavedRoute) {
+  editingSavedRouteId.value = route.id
+  focusedSavedRouteId.value = route.id
+  saveNameOpen.value = false
+  routeNameDraft.value = route.name
+  const routeData = cloneRouteData(route.drawCoords, route.selected)
+  routeAction.value = {
+    type: 'restore',
+    revision: routeAction.value.revision + 1,
+    ...routeData,
   }
+  message.value = `Editing “${route.name}”. Add trail sections or draw more, then save changes.`
+}
+
+function focusSavedRoute(route: SavedRoute) {
+  focusedSavedRouteId.value = route.id
+  const focusCoords = [
+    ...route.drawCoords,
+    ...route.selected.flatMap(section => section.parts.flat()),
+  ]
+  routeAction.value = {
+    type: 'focus-route',
+    revision: routeAction.value.revision + 1,
+    focusCoords,
+    focusDrawCoords: route.drawCoords,
+    focusSections: route.selected,
+  }
+}
+
+function stopEditingSavedRoute() {
+  editingSavedRouteId.value = null
+  message.value = 'Stopped editing the saved route. The current route remains in the builder.'
+}
+
+function cancelSaveRoute() {
+  saveNameOpen.value = false
+}
+
+function savedRouteDistance(route: SavedRoute) {
+  const meters = route.selected.reduce((sum, section) => sum + sectionMeters(section), 0)
+    + (route.drawCoords.length > 1 ? lengthMeters(route.drawCoords) : 0)
+  return `${(meters / 1609.344).toFixed(2)} mi`
+}
+
+function savedRouteSurface(route: SavedRoute) {
+  const totals = savedRouteSurfaceTotals(route)
+  if (totals.gravel > 0 && totals.unknown === 0) return 'Gravel'
+  if (totals.paved > 0 && totals.unknown === 0) return 'Paved'
+  if (totals.unknown > 0) return 'Some surface unknown'
+  return 'Mapped trails'
+}
+
+function savedRouteSurfaceTotals(route: SavedRoute) {
+  const totals: Record<SurfaceGroup, number> = { paved: 0, gravel: 0, sidewalk: 0, unknown: 0 }
+  route.selected.forEach(section => totals[section.group] += sectionMeters(section))
+  if (route.drawCoords.length > 1) totals.unknown += lengthMeters(route.drawCoords)
+  return totals
+}
+
+function savedRouteKnownPercent(route: SavedRoute) {
+  const totals = savedRouteSurfaceTotals(route)
+  const total = Object.values(totals).reduce((sum, meters) => sum + meters, 0)
+  const known = total - totals.unknown
+  return total ? `${Math.round(known / total * 100)}%` : '—'
+}
+
+function savedRouteSurfaceSummary(route: SavedRoute) {
+  const totals = savedRouteSurfaceTotals(route)
+  const miles = (meters: number) => `${(meters / 1609.344).toFixed(1)} mi`
+  return `${miles(totals.paved)} paved · ${miles(totals.gravel)} gravel · ${miles(totals.sidewalk)} connector · ${miles(totals.unknown)} unknown`
 }
 
 function clearRoute() {
@@ -136,6 +265,10 @@ function keepDrawing() {
 
       <section class="card">
         <h2 class="card-title">Your route</h2>
+        <div v-if="editingSavedRoute" class="editing-route-banner">
+          <span>Editing saved route: <strong>{{ editingSavedRoute.name }}</strong></span>
+          <button class="text-button" @click="stopEditingSavedRoute">Stop editing</button>
+        </div>
         <div class="stats-grid">
           <div>
             <div class="stat-label">Distance</div>
@@ -149,11 +282,45 @@ function keepDrawing() {
           </div>
         </div>
         <p class="surface-summary">{{ hasRoute ? surfaceSummary : 'No route yet' }}</p>
+        <p v-if="drawCoords.length > 1" class="stat-sub">The hand-drawn section is an estimate. Its surface stays unknown until you accept a snap to mapped trails; basemap colors alone don’t provide route data.</p>
         <div class="actions-grid">
           <button class="action-button" :disabled="!canUndo" @click="undoLast">Undo last</button>
           <button class="action-button" :disabled="!hasRoute" @click="clearRoute">Clear route</button>
-          <button class="action-button primary" :disabled="!hasRoute" @click="saveRoute">Save route</button>
-          <button class="action-button" @click="restoreRoute">Restore saved</button>
+          <button class="action-button primary" :disabled="!hasRoute" @click="saveRoute">{{ editingSavedRouteId ? 'Save changes' : 'Save route' }}</button>
+        </div>
+        <div v-if="saveNameOpen" class="save-name-form">
+          <label class="stat-label" for="route-name">Name this route</label>
+          <input id="route-name" v-model="routeNameDraft" class="route-name-input" maxlength="60" @keydown.enter="confirmSaveRoute">
+          <div class="save-name-actions">
+            <button class="action-button primary" @click="confirmSaveRoute">Save</button>
+            <button class="action-button" @click="cancelSaveRoute">Cancel</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2 class="card-title">Saved routes</h2>
+        <p v-if="!savedRoutes.length" class="saved-routes-empty">Saved routes stay in this browser on this device.</p>
+        <div v-else class="saved-routes-list">
+          <article v-for="route in savedRoutes" :key="route.id" class="saved-route-item">
+            <button type="button" class="saved-route-focus" :aria-label="`Focus map on ${route.name}`" @click="focusSavedRoute(route)">
+              <span class="saved-route-info">
+                <strong class="saved-route-name">{{ route.name }}</strong>
+                <span class="saved-route-meta">{{ savedRouteDistance(route) }} · {{ savedRouteSurface(route) }}</span>
+              </span>
+            </button>
+            <button class="action-button saved-route-edit" :disabled="editingSavedRouteId === route.id" @click="editSavedRoute(route)">
+              {{ editingSavedRouteId === route.id ? 'Editing' : 'Edit route' }}
+            </button>
+            <div v-if="focusedSavedRouteId === route.id" class="saved-route-details">
+              <div class="saved-route-detail-grid">
+                <div><span>Distance</span><strong>{{ savedRouteDistance(route) }}</strong></div>
+                <div><span>Known surface</span><strong>{{ savedRouteKnownPercent(route) }}</strong></div>
+              </div>
+              <p>{{ savedRouteSurfaceSummary(route) }}</p>
+              <small>Saved {{ new Date(route.savedAt).toLocaleDateString() }}</small>
+            </div>
+          </article>
         </div>
       </section>
 

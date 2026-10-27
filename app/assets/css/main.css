@@ -46,6 +46,26 @@ h1 { margin: 10px 0 5px; font-family: Georgia, serif; font-size: 32px; font-weig
 .stat-sub { margin-top: 3px; color: var(--muted); font-size: 11px; }
 .surface-summary { margin: 11px 0 0; color: #59635b; font-size: 11px; line-height: 1.5; }
 .actions-grid { margin-top: 14px; }
+.editing-route-banner { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 0 0 12px; padding: 9px 10px; border: 1px solid #cbd9f4; border-radius: 9px; color: #284875; background: #f0f5ff; font-size: 11px; line-height: 1.4; }
+.text-button { flex: none; padding: 3px 0 3px 6px; border: 0; color: #284875; background: transparent; font-size: 11px; font-weight: 650; text-decoration: underline; }
+.save-name-form { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
+.route-name-input { display: block; width: 100%; margin: 5px 0 9px; padding: 9px 10px; border: 1px solid #d4d9d1; border-radius: 8px; color: var(--ink); background: white; font: inherit; font-size: 13px; }
+.save-name-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.saved-routes-empty { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.45; }
+.saved-routes-list { display: grid; gap: 9px; }
+.saved-route-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 9px 10px; padding: 10px; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
+.saved-route-focus { flex: 1; min-width: 0; padding: 2px 0; border: 0; color: inherit; background: transparent; text-align: left; }
+.saved-route-focus:hover .saved-route-name { color: #245bdb; text-decoration: underline; }
+.saved-route-info { display: grid; min-width: 0; gap: 3px; }
+.saved-route-name { overflow: hidden; color: var(--ink); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.saved-route-meta { color: var(--muted); font-size: 10px; }
+.saved-route-edit { flex: none; padding: 7px 9px; font-size: 11px; }
+.saved-route-details { grid-column: 1 / -1; padding-top: 9px; border-top: 1px solid var(--line); }
+.saved-route-detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.saved-route-detail-grid > div { display: grid; gap: 2px; }
+.saved-route-detail-grid span, .saved-route-details small { color: var(--muted); font-size: 10px; }
+.saved-route-detail-grid strong { color: var(--ink); font-size: 12px; }
+.saved-route-details p { margin: 8px 0 4px; color: #59635b; font-size: 10px; line-height: 1.45; }
 .legend-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 7px; color: #4f5b52; font-size: 12px; }
 .legend-item { display: flex; align-items: center; gap: 8px; }
 .swatch { width: 20px; height: 4px; border-radius: 3px; }
